@@ -1,0 +1,1619 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Policia - Fuga do Cânion</title>
+    <!-- Biblioteca MQTT moderna para conexão em tempo real -->
+    <script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
+    <style>
+        :root {
+            --bg-desert: #180e07;
+            --bg-panel: #29160c;
+            --dirt-path: #4a2814;
+            --wood-main: #6e3c1d;
+            --wood-light: #9c592b;
+            --gold-bright: #f4a261;
+            --gold-text: #e9c46a;
+            --turn-green: #2a9d8f;
+            --turn-wait: #a24b3b;
+            --cell-size: 64px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        html, body {
+            height: 100%;
+            height: 100dvh;
+            height: -webkit-fill-available;
+            width: 100vw;
+            overflow: hidden;
+            position: fixed;
+            background-color: var(--bg-desert);
+            color: #f1ebd9;
+            display: flex;
+            flex-direction: column;
+            font-family: 'Georgia', serif;
+        }
+
+        /* CABEÇALHO */
+        header {
+            background: linear-gradient(180deg, #3d2213 0%, #201108 100%);
+            border-bottom: 2px solid #140a05;
+            padding: 4px 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.8);
+            z-index: 30;
+            flex-shrink: 0;
+        }
+
+        .header-title h1 {
+            font-size: 0.85rem;
+            color: var(--gold-text);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        .stats-wood-board {
+            display: flex;
+            gap: 6px;
+            background: #140a05;
+            border: 1px solid var(--wood-main);
+            border-radius: 5px;
+            padding: 2px 6px;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .stat-label {
+            font-size: 0.5rem;
+            color: #a8947e;
+            font-weight: bold;
+        }
+
+        .stat-value {
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: var(--gold-text);
+        }
+
+        .header-buttons {
+            display: flex;
+            gap: 4px;
+        }
+
+        .btn-wood {
+            background: linear-gradient(180deg, var(--wood-light) 0%, var(--wood-main) 100%);
+            border: 1px solid #190c05;
+            color: #fff2db;
+            padding: 4px 8px;
+            font-size: 0.7rem;
+            font-family: inherit;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn-wood:hover { filter: brightness(1.15); }
+
+        /* FAIXA DE TURNO */
+        #turn-banner {
+            padding: 4px 8px;
+            text-align: center;
+            font-size: 0.78rem;
+            line-height: 1.2;
+            font-weight: bold;
+            border-bottom: 2px solid #140a05;
+            transition: all 0.3s ease;
+            z-index: 30;
+            flex-shrink: 0;
+        }
+
+        #turn-banner.my-turn {
+            background: #1b4332;
+            color: #95d5b2;
+            border-bottom-color: #40916c;
+            animation: pulse-turn 1.4s infinite alternate;
+        }
+
+        #turn-banner.waiting-turn {
+            background: #3b1c1c;
+            color: #f4a261;
+            border-bottom-color: #6e2d2d;
+        }
+
+        @keyframes pulse-turn {
+            from { background-color: #1b4332; }
+            to { background-color: #2d6a4f; }
+        }
+
+        /* VIEWPORT DO TABULEIRO */
+        #viewport {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            position: relative;
+            background: radial-gradient(circle at center, #24130a 0%, #0d0603 100%);
+            touch-action: none;
+            cursor: grab;
+        }
+
+        #viewport:active { cursor: grabbing; }
+
+        #board-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transform-origin: center center;
+            will-change: transform;
+            pointer-events: none;
+        }
+
+        #board-grid {
+            display: grid;
+            gap: 4px;
+            padding: 14px;
+            background: rgba(0, 0, 0, 0.45);
+            border: 3px solid #331a0d;
+            border-radius: 12px;
+            box-shadow: 0 0 35px rgba(0,0,0,0.9);
+            pointer-events: auto;
+        }
+
+        .grid-cell {
+            width: var(--cell-size);
+            height: var(--cell-size);
+            border-radius: 6px;
+            background: rgba(30, 16, 8, 0.4);
+            border: 1px dashed rgba(110, 60, 29, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .grid-cell.valid-drop {
+            background: rgba(42, 157, 143, 0.35);
+            border: 2px dashed #2a9d8f;
+            cursor: pointer;
+            box-shadow: inset 0 0 12px rgba(42, 157, 143, 0.6);
+        }
+
+        .grid-cell.invalid-drop {
+            background: rgba(231, 111, 81, 0.15);
+            border: 1px dashed rgba(231, 111, 81, 0.4);
+        }
+
+        /* CONTROLES DE ZOOM */
+        .map-controls {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 25;
+        }
+
+        .btn-map {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #2b180d;
+            border: 2px solid var(--gold-bright);
+            color: var(--gold-text);
+            font-size: 1rem;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.8);
+            cursor: pointer;
+            touch-action: auto;
+        }
+
+        .btn-map:active { transform: scale(0.92); background: #3d2112; }
+
+        /* GAVETA LATERAL DE JOGADORES */
+        .drawer-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(2px);
+            z-index: 90;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .drawer-backdrop.active { opacity: 1; pointer-events: auto; }
+
+        .players-drawer {
+            position: fixed;
+            top: 0;
+            right: -320px;
+            width: 280px;
+            height: 100vh;
+            background: linear-gradient(180deg, #2c160b 0%, #150904 100%);
+            border-left: 3px solid var(--wood-main);
+            box-shadow: -5px 0 25px rgba(0,0,0,0.8);
+            z-index: 95;
+            transition: right 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+        }
+
+        .players-drawer.open { right: 0; }
+
+        .drawer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--wood-main);
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .drawer-header h3 {
+            font-size: 0.95rem;
+            color: var(--gold-bright);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .btn-close-drawer {
+            background: none;
+            border: none;
+            color: var(--gold-text);
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .players-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .player-item {
+            background: #1e0e06;
+            border: 2px solid #4a2814;
+            border-radius: 8px;
+            padding: 8px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .player-item.turn-active {
+            border-color: #2a9d8f;
+            background: #112d26;
+            box-shadow: 0 0 10px rgba(42, 157, 143, 0.4);
+        }
+
+        .player-info { display: flex; flex-direction: column; }
+
+        .player-name { font-size: 0.85rem; font-weight: bold; color: #fff; }
+
+        .player-role { font-size: 0.65rem; color: var(--gold-bright); }
+
+        .badge-turn {
+            background: #2a9d8f;
+            color: #fff;
+            font-size: 0.65rem;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* PAINEL INFERIOR: MÃO DE CARTAS */
+        footer {
+            background: linear-gradient(0deg, #180e07 0%, #29160c 100%);
+            border-top: 2px solid #140a05;
+            padding: 4px 8px calc(6px + env(safe-area-inset-bottom, 0px)) 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            z-index: 30;
+            flex-shrink: 0;
+        }
+
+        .hand-container {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            max-width: 380px;
+        }
+
+        .hand-card {
+            width: 66px;
+            height: 66px;
+            background: #201108;
+            border: 2px solid #542e17;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.7);
+            transition: transform 0.15s, border-color 0.15s;
+            flex-shrink: 0;
+        }
+
+        .hand-card.selected {
+            border-color: var(--gold-bright);
+            transform: translateY(-4px) scale(1.05);
+            box-shadow: 0 0 14px rgba(244, 162, 97, 0.7);
+            background: #3d2112;
+        }
+
+        .hand-card.disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            filter: grayscale(0.5);
+        }
+
+        .btn-rotate {
+            background: linear-gradient(180deg, #b06530 0%, #6e3c1d 100%);
+            color: #fff;
+            border: 2px solid #190c05;
+            padding: 3px 12px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            font-family: inherit;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        .btn-rotate:disabled {
+            background: #3d281c;
+            color: #735340;
+            cursor: not-allowed;
+        }
+
+        .card-svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            pointer-events: none;
+        }
+
+        /* MODAIS */
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 5, 2, 0.94);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .modal.hidden { display: none; }
+
+        .modal-content {
+            background: linear-gradient(180deg, #3d2112 0%, #1f1007 100%);
+            border: 3px solid var(--wood-light);
+            border-radius: 12px;
+            width: 92%;
+            max-width: 420px;
+            padding: 18px;
+            text-align: center;
+            box-shadow: 0 0 35px rgba(0,0,0,0.9);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .input-box {
+            width: 100%;
+            padding: 8px;
+            margin: 6px 0 10px 0;
+            background: #140904;
+            border: 2px solid var(--wood-main);
+            color: var(--gold-text);
+            font-size: 0.9rem;
+            font-family: inherit;
+            font-weight: bold;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .input-box:focus { outline: none; border-color: var(--gold-bright); }
+
+        .room-item {
+            background: #190b04;
+            border: 1px solid var(--wood-main);
+            border-radius: 6px;
+            padding: 6px 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- CABEÇALHO -->
+    <header>
+        <div class="header-title">
+            <h1 id="ui-game-mode-title">Policia</h1>
+        </div>
+        <div class="stats-wood-board">
+            <div class="stat-item">
+                <span class="stat-label">SAÍDAS</span>
+                <span id="ui-open-exits" class="stat-value" style="color:var(--gold-bright);">5</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">MONTE</span>
+                <span id="ui-deck-count" class="stat-value" style="color:#70e000;">66</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">SALA / MODO</span>
+                <span id="ui-room-code" class="stat-value" style="font-size:0.75rem;">Solo</span>
+            </div>
+        </div>
+        <div class="header-buttons">
+            <button class="btn-wood" onclick="App.togglePlayersDrawer()">👥 (<span id="ui-header-players-count">1</span>)</button>
+            <button class="btn-wood" onclick="App.openMainMenu()">Menu Principal</button>
+        </div>
+    </header>
+
+    <!-- FAIXA DE TURNO -->
+    <div id="turn-banner" class="waiting-turn">Carregando...</div>
+
+    <!-- PAINEL LATERAL DE JOGADORES -->
+    <div id="drawer-backdrop" class="drawer-backdrop" onclick="App.togglePlayersDrawer()"></div>
+    <div id="players-drawer" class="players-drawer">
+        <div class="drawer-header">
+            <h3>👥 Xerifes na Mesa</h3>
+            <button class="btn-close-drawer" onclick="App.togglePlayersDrawer()">✖</button>
+        </div>
+        <ul id="players-list" class="players-list"></ul>
+    </div>
+
+    <!-- VIEWPORT COM CÂMERA -->
+    <main id="viewport">
+        <div id="board-container">
+            <div id="board-grid"></div>
+        </div>
+
+        <div class="map-controls">
+            <button class="btn-map" onclick="PanZoom.zoom(0.18)" title="Aproximar">➕</button>
+            <button class="btn-map" onclick="PanZoom.zoom(-0.18)" title="Afastar">➖</button>
+            <button class="btn-map" onclick="PanZoom.recenter()" title="Centralizar Mesa">🎯</button>
+        </div>
+    </main>
+
+    <!-- MÃO E CONTROLES -->
+    <footer>
+        <button id="btn-rotate" class="btn-rotate" onclick="App.rotateSelected()" disabled>
+            ↻ Girar <span id="ui-rotation">(0°)</span>
+        </button>
+        <div id="hand-slots" class="hand-container"></div>
+    </footer>
+
+    <!-- MODAL 1: MENU PRINCIPAL COM 3 MODOS -->
+    <div id="menu-modal" class="modal">
+        <div class="modal-content">
+            <h2 style="color:var(--gold-text); margin-bottom:6px;">Policia - Fuga do Cânion</h2>
+            <p style="color:#d1bfa9; font-size:0.85rem; margin-bottom:16px;">Como você deseja jogar hoje?</p>
+
+            <button class="btn-wood" style="width:100%; padding:11px; margin-bottom:8px; font-size:0.9rem;" onclick="App.showSoloConfig(false)">
+                🤠 Modo Solo (Sem Robô)
+            </button>
+            <button class="btn-wood" style="width:100%; padding:11px; margin-bottom:8px; font-size:0.9rem; background:linear-gradient(180deg, #b06530 0%, #6e3c1d 100%);" onclick="App.showSoloConfig(true)">
+                🤖 Modo Solo + Robô
+            </button>
+            <button class="btn-wood" style="width:100%; padding:11px; font-size:0.9rem; background:linear-gradient(180deg, #2a9d8f 0%, #1e6b61 100%);" onclick="App.showMultiplayerLobby()">
+                👥 Modo Multiplayer (Online em Grupo)
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL 2: CONFIGURAÇÃO DO MODO SOLO (PURO OU BOT) -->
+    <div id="solo-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 id="solo-modal-title" style="color:var(--gold-text); margin-bottom:8px;">Modo Solo</h2>
+            <p id="solo-modal-desc" style="color:#d1bfa9; font-size:0.85rem; margin-bottom:12px;">Configure sua partida:</p>
+
+            <label style="font-size:0.75rem; color:#a8947e; font-weight:bold;">SEU NOME / APELIDO:</label>
+            <input id="inp-solo-name" class="input-box" type="text" value="Principe Francis" maxlength="25">
+
+            <label style="font-size:0.75rem; color:#a8947e; font-weight:bold;">SAÍDAS DA CELA INICIAL:</label>
+            <div style="display:flex; justify-content:center; gap:10px; margin:8px 0 16px 0;">
+                <button class="btn-wood" style="flex:1; padding:10px;" onclick="App.startSolo(5)">5 Saídas (Fácil)</button>
+                <button class="btn-wood" style="flex:1; padding:10px;" onclick="App.startSolo(6)">6 Saídas (Difícil)</button>
+            </div>
+            <button class="btn-wood" style="width:100%; padding:6px; background:#4a2814;" onclick="App.openMainMenu()">Voltar</button>
+        </div>
+    </div>
+
+    <!-- MODAL 3: LOBBY MULTIPLAYER -->
+    <div id="multi-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 style="color:var(--gold-text); margin-bottom:6px;">Salas Online</h2>
+            
+            <label style="font-size:0.75rem; color:#a8947e; font-weight:bold;">SEU NOME / APELIDO ÚNICO:</label>
+            <input id="inp-multi-name" class="input-box" type="text" value="Principe Francis" maxlength="25">
+
+            <div style="background:#140904; border:1px solid var(--wood-main); border-radius:8px; padding:10px; margin-bottom:12px;">
+                <label style="font-size:0.75rem; color:var(--gold-bright); font-weight:bold;">CRIAR NOVA SALA:</label>
+                <div style="display:flex; gap:6px; margin:6px 0;">
+                    <input id="inp-new-room" class="input-box" style="margin:0;" type="text" value="Francis2026">
+                    <button class="btn-wood" onclick="App.generateRandomRoomCode()" title="Gerar novo código">🎲</button>
+                </div>
+                <div style="display:flex; gap:6px; margin-top:8px;">
+                    <button class="btn-wood" style="flex:1; padding:8px;" onclick="App.createMultiRoom(5)">Criar (5 Saídas)</button>
+                    <button class="btn-wood" style="flex:1; padding:8px;" onclick="App.createMultiRoom(6)">Criar (6 Saídas)</button>
+                </div>
+            </div>
+
+            <label style="font-size:0.75rem; color:#a8947e; font-weight:bold;">SALAS ABERTAS DETECTADAS:</label>
+            <div id="rooms-list-container" style="max-height:120px; overflow-y:auto; margin:6px 0 12px 0;">
+                <p style="font-size:0.8rem; color:#777; padding:10px;">Procurando salas ativas...</p>
+            </div>
+
+            <button class="btn-wood" style="width:100%; padding:6px; background:#4a2814;" onclick="App.openMainMenu()">Voltar ao Menu</button>
+        </div>
+    </div>
+
+    <!-- MODAL 4: SALA DE ESPERA -->
+    <div id="waiting-approval-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 style="color:var(--gold-text); margin-bottom:8px;">Aguardando Aprovação</h2>
+            <p style="color:#d1bfa9; font-size:0.85rem; margin-bottom:16px;">O Administrador da sala está avaliando a sua entrada...</p>
+            <div style="font-size:1.8rem; margin-bottom:16px;">⏳</div>
+            <button class="btn-wood" onclick="App.cancelJoinRequest()">Cancelar</button>
+        </div>
+    </div>
+
+    <!-- MODAL 5: SOLICITAÇÃO DE ENTRADA -->
+    <div id="host-approval-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 style="color:var(--gold-text); margin-bottom:8px;">Solicitação de Entrada</h2>
+            <p style="color:#d1bfa9; font-size:0.85rem; margin-bottom:12px;">O seguinte jogador deseja entrar na sua sala:</p>
+            <h3 id="ui-requesting-player-name" style="color:#70e000; margin-bottom:16px;">Jogador</h3>
+            <div style="display:flex; gap:10px;">
+                <button class="btn-wood" style="flex:1; padding:10px; background:var(--turn-green);" onclick="App.respondJoinRequest(true)">Aprovar Entrada</button>
+                <button class="btn-wood" style="flex:1; padding:10px; background:var(--turn-wait);" onclick="App.respondJoinRequest(false)">Recusar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL FINAL -->
+    <div id="result-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 id="result-title" style="color:var(--gold-text); margin-bottom:8px;">Fim de Jogo</h2>
+            <p id="result-message" style="color:#d1bfa9; margin-bottom:16px;">Partida finalizada!</p>
+            <button class="btn-wood" style="width:100%; padding:10px;" onclick="App.openMainMenu()">Menu Principal</button>
+        </div>
+    </div>
+
+<script>
+const PanZoom = {
+    x: 0, y: 0, scale: 1, isDragging: false, startX: 0, startY: 0, hasMoved: false,
+    init() {
+        const vp = document.getElementById('viewport');
+        vp.addEventListener('pointerdown', (e) => {
+            this.isDragging = true;
+            this.startX = e.clientX - this.x;
+            this.startY = e.clientY - this.y;
+            this.hasMoved = false;
+        });
+        window.addEventListener('pointermove', (e) => {
+            if (!this.isDragging) return;
+            const dx = Math.abs(e.clientX - (this.startX + this.x));
+            const dy = Math.abs(e.clientY - (this.startY + this.y));
+            if (dx > 4 || dy > 4) this.hasMoved = true;
+            this.x = e.clientX - this.startX;
+            this.y = e.clientY - this.startY;
+            this.applyTransform();
+        });
+        window.addEventListener('pointerup', () => { this.isDragging = false; });
+        vp.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            this.zoom(e.deltaY < 0 ? 0.1 : -0.1);
+        }, { passive: false });
+    },
+    zoom(delta) {
+        this.scale = Math.min(Math.max(0.4, this.scale + delta), 2.2);
+        this.applyTransform();
+    },
+    recenter() {
+        this.x = 0; this.y = 0; this.scale = 1;
+        this.applyTransform();
+    },
+    applyTransform() {
+        document.getElementById('board-container').style.transform = `translate(${this.x}px, ${this.y}px) scale(${this.scale})`;
+    }
+};
+
+const Sound = {
+    ctx: null,
+    init() {
+        if (!this.ctx) {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            this.ctx = new AC();
+        }
+    },
+    playTap() {
+        try {
+            this.init();
+            if (this.ctx.state === 'suspended') this.ctx.resume();
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(180, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.08);
+            gain.gain.setValueAtTime(0.2, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.08);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.08);
+        } catch(e) {}
+    },
+    playTurnNotice() {
+        try {
+            this.init();
+            if (this.ctx.state === 'suspended') this.ctx.resume();
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(440, this.ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(880, this.ctx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(); osc.stop(this.ctx.currentTime + 0.15);
+        } catch(e) {}
+    },
+    playWin() {
+        [220, 277, 330, 440, 554].forEach((freq, i) => {
+            setTimeout(() => {
+                try {
+                    this.init();
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                    gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.3);
+                    osc.connect(gain); gain.connect(this.ctx.destination);
+                    osc.start(); osc.stop(this.ctx.currentTime + 0.3);
+                } catch(e) {}
+            }, i * 110);
+        });
+    }
+};
+
+const CardCatalog = {
+    JAIL_5_L: { id: 'JAIL_5_L', connections: { top: true, right: true, bottom: true, left: true }, isJail: true, jailType: '5_left' },
+    JAIL_5_R: { id: 'JAIL_5_R', connections: { top: true, right: false, bottom: true, left: true }, isJail: true, jailType: '5_right' },
+    JAIL_6_L: { id: 'JAIL_6_L', connections: { top: true, right: true, bottom: true, left: false }, isJail: true, jailType: '6_left' },
+    JAIL_6_M: { id: 'JAIL_6_M', connections: { top: true, right: true, bottom: true, left: true }, isJail: true, jailType: '6_mid' },
+    JAIL_6_R: { id: 'JAIL_6_R', connections: { top: true, right: false, bottom: true, left: true }, isJail: true, jailType: '6_right' },
+
+    CURVE:     { id: 'CURVE',     connections: { top: true, right: true, bottom: false, left: false } },
+    STRAIGHT:  { id: 'STRAIGHT',  connections: { top: true, right: false, bottom: true, left: false } },
+    T_JUNCT:   { id: 'T_JUNCT',   connections: { top: true, right: true, bottom: false, left: true } },
+    CROSS:     { id: 'CROSS',     connections: { top: true, right: true, bottom: true, left: true } },
+    BARRICADE: { id: 'BARRICADE', connections: { top: false, right: false, bottom: true, left: false }, isBarricade: true }
+};
+
+class Card {
+    constructor(template, rotation = 0) {
+        this.template = template;
+        this.rotation = Number(rotation) || 0;
+    }
+    getConnections() {
+        const steps = (Math.round(this.rotation / 90) % 4 + 4) % 4;
+        let c = { ...this.template.connections };
+        for (let i = 0; i < steps; i++) {
+            c = { top: c.left, right: c.top, bottom: c.right, left: c.bottom };
+        }
+        return c;
+    }
+}
+
+const SVGRenderer = {
+    render(card) {
+        const conns = card.getConnections();
+        const cx = 32, cy = 32, w = 18;
+        let paths = '';
+
+        if (conns.top) {
+            paths += `<rect x="${cx - w/2}" y="0" width="${w}" height="${cy}" fill="#211007"/>`;
+            paths += `<rect x="${cx - w/2 - 2}" y="4" width="${w + 4}" height="3.5" fill="#874a23" stroke="#180a03" stroke-width="0.8"/>`;
+        }
+        if (conns.bottom) {
+            paths += `<rect x="${cx - w/2}" y="${cy}" width="${w}" height="${cy}" fill="#211007"/>`;
+            paths += `<rect x="${cx - w/2 - 2}" y="${cy + 18}" width="${w + 4}" height="3.5" fill="#874a23" stroke="#180a03" stroke-width="0.8"/>`;
+        }
+        if (conns.left) {
+            paths += `<rect x="0" y="${cy - w/2}" width="${cx}" height="${w}" fill="#211007"/>`;
+            paths += `<rect x="4" y="${cy - w/2 - 2}" width="3.5" height="${w + 4}" fill="#874a23" stroke="#180a03" stroke-width="0.8"/>`;
+        }
+        if (conns.right) {
+            paths += `<rect x="${cx}" y="${cy - w/2}" width="${cx}" height="${w}" fill="#211007"/>`;
+            paths += `<rect x="${cx + 18}" y="${cy - w/2 - 2}" width="3.5" height="${w + 4}" fill="#874a23" stroke="#180a03" stroke-width="0.8"/>`;
+        }
+
+        paths += `<rect x="${cx - w/2}" y="${cy - w/2}" width="${w}" height="${w}" fill="#211007"/>`;
+
+        if (card.template.isJail) {
+            const jType = card.template.jailType;
+            if (jType === '5_left' || jType === '6_mid') {
+                paths += `
+                    <rect x="14" y="14" width="36" height="36" fill="#140904" stroke="#874a23" stroke-width="2" rx="4"/>
+                    <circle cx="32" cy="30" r="8" fill="#d4a373"/>
+                    <rect x="25" y="27" width="14" height="5" fill="#1a1a1a" rx="1"/>
+                    <ellipse cx="32" cy="23" rx="11" ry="3" fill="#111"/>
+                    <rect x="26" y="17" width="12" height="6" fill="#111" rx="1"/>
+                    <line x1="20" y1="14" x2="20" y2="50" stroke="#7f8c8d" stroke-width="2"/>
+                    <line x1="28" y1="14" x2="28" y2="50" stroke="#7f8c8d" stroke-width="2"/>
+                    <line x1="36" y1="14" x2="36" y2="50" stroke="#7f8c8d" stroke-width="2"/>
+                    <line x1="44" y1="14" x2="44" y2="50" stroke="#7f8c8d" stroke-width="2"/>
+                `;
+            } else {
+                paths += `
+                    <rect x="18" y="24" width="28" height="16" fill="#542e17" stroke="#874a23" stroke-width="1.5" rx="3"/>
+                    <text x="32" y="35" fill="#e9c46a" font-size="8" font-weight="bold" text-anchor="middle" font-family="Georgia">CELA</text>
+                `;
+            }
+        } else if (card.template.isBarricade) {
+            paths += `
+                <circle cx="${cx}" cy="${cy}" r="11" fill="#30180c" stroke="#542e17" stroke-width="1.5"/>
+                <rect x="20" y="30" width="24" height="5" fill="#9c592b" stroke="#1f0f06" stroke-width="1" transform="rotate(-25 32 32)"/>
+                <rect x="20" y="30" width="24" height="5" fill="#874a23" stroke="#1f0f06" stroke-width="1" transform="rotate(25 32 32)"/>
+                <circle cx="${cx}" cy="${cy}" r="3.5" fill="#f4a261"/>
+            `;
+        }
+
+        return `
+            <svg class="card-svg" viewBox="0 0 64 64">
+                <rect width="64" height="64" rx="6" fill="#8a4513" stroke="#3d2112" stroke-width="1.5"/>
+                <path d="M 0 12 Q 32 6 64 12 L 64 24 Q 32 18 0 24 Z" fill="#b86524" opacity="0.4"/>
+                <path d="M 0 38 Q 32 32 64 38 L 64 50 Q 32 44 0 50 Z" fill="#6e3713" opacity="0.5"/>
+                ${paths}
+            </svg>
+        `;
+    }
+};
+
+class Board {
+    constructor() {
+        this.grid = new Map();
+        this.minX = 0; this.maxX = 0;
+        this.minY = 0; this.maxY = 0;
+    }
+    place(x, y, card) {
+        this.grid.set(`${x},${y}`, card);
+        this.minX = Math.min(this.minX, x);
+        this.maxX = Math.max(this.maxX, x);
+        this.minY = Math.min(this.minY, y);
+        this.maxY = Math.max(this.maxY, y);
+    }
+    get(x, y) { return this.grid.get(`${x},${y}`) || null; }
+    isValidPlacement(card, pos, rotation = 0) {
+        const { x, y } = pos;
+        if (this.grid.has(`${x},${y}`)) return false;
+
+        const testCard = new Card(card.template, rotation);
+        const conns = testCard.getConnections();
+
+        const neighbors = [
+            { x: x, y: y - 1, side: 'top', opp: 'bottom' },
+            { x: x + 1, y: y, side: 'right', opp: 'left' },
+            { x: x, y: y + 1, side: 'bottom', opp: 'top' },
+            { x: x - 1, y: y, side: 'left', opp: 'right' }
+        ];
+
+        let adjacentCount = 0;
+        let connectedTunnel = false;
+
+        for (const n of neighbors) {
+            const neighbor = this.get(n.x, n.y);
+            if (neighbor) {
+                adjacentCount++;
+                const nConns = neighbor.getConnections();
+                if (conns[n.side] !== nConns[n.opp]) return false;
+                if (conns[n.side] && nConns[n.opp]) connectedTunnel = true;
+            }
+        }
+        return adjacentCount > 0 && connectedTunnel;
+    }
+    getOpenExitsCount() {
+        let exits = 0;
+        for (const [key, card] of this.grid.entries()) {
+            const [x, y] = key.split(',').map(Number);
+            const conns = card.getConnections();
+            if (conns.top && !this.grid.has(`${x},${y - 1}`)) exits++;
+            if (conns.right && !this.grid.has(`${x + 1},${y}`)) exits++;
+            if (conns.bottom && !this.grid.has(`${x},${y + 1}`)) exits++;
+            if (conns.left && !this.grid.has(`${x - 1},${y}`)) exits++;
+        }
+        return exits;
+    }
+}
+
+class Deck {
+    constructor() {
+        this.cards = [];
+        this.hand = [];
+        this.init();
+    }
+    init() {
+        const buildCards = [
+            { t: CardCatalog.CURVE,    count: 26 },
+            { t: CardCatalog.STRAIGHT, count: 16 },
+            { t: CardCatalog.T_JUNCT,  count: 14 },
+            { t: CardCatalog.CROSS,    count: 7 }
+        ];
+        const barricades = [
+            { t: CardCatalog.BARRICADE, count: 6 }
+        ];
+
+        let pathPool = [];
+        buildCards.forEach(i => {
+            for (let c = 0; c < i.count; c++) pathPool.push(new Card(i.t));
+        });
+
+        for (let i = pathPool.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [pathPool[i], pathPool[j]] = [pathPool[j], pathPool[i]];
+        }
+
+        this.hand = [pathPool.pop(), pathPool.pop(), pathPool.pop()];
+
+        let remainingDeck = [...pathPool];
+        barricades.forEach(i => {
+            for (let c = 0; c < i.count; c++) remainingDeck.push(new Card(i.t));
+        });
+
+        for (let i = remainingDeck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [remainingDeck[i], remainingDeck[j]] = [remainingDeck[j], remainingDeck[i]];
+        }
+
+        this.cards = remainingDeck;
+    }
+    replenish() {
+        while (this.hand.length < 3 && this.cards.length > 0) {
+            this.hand.push(this.cards.pop());
+        }
+    }
+    use(idx) {
+        if (idx >= 0 && idx < this.hand.length) {
+            const played = this.hand.splice(idx, 1)[0];
+            this.replenish();
+            return played;
+        }
+        return null;
+    }
+}
+
+const App = {
+    mode: 'SOLO_PURE', // 'SOLO_PURE', 'SOLO_BOT' ou 'MULTI'
+    board: null,
+    deck: null,
+    aiDeck: null,
+    selectedIdx: null,
+    rotation: 0,
+    roomCode: 'Francis2026',
+    playerName: '',
+    myPlayerId: '',
+    players: [],
+    currentTurnIndex: 0,
+    mqttClient: null,
+    cardsPlaced: 0,
+    activeRoomsMap: new Map(),
+    pendingJoinRequest: null,
+    lastActivityTime: Date.now(),
+    inactivityInterval: null,
+    soloWithBot: false,
+
+    init() {
+        this.board = new Board();
+        this.deck = new Deck();
+        this.selectedIdx = null;
+        this.rotation = 0;
+        this.cardsPlaced = 0;
+        this.resetInactivityTimer();
+    },
+
+    resetInactivityTimer() {
+        this.lastActivityTime = Date.now();
+        if (this.inactivityInterval) clearInterval(this.inactivityInterval);
+        
+        this.inactivityInterval = setInterval(() => {
+            const elapsed = Date.now() - this.lastActivityTime;
+            if (elapsed > 10 * 60 * 1000) {
+                alert('A partida foi encerrada automaticamente por inatividade (10 minutos sem jogar).');
+                this.openMainMenu();
+            }
+        }, 15000);
+    },
+
+    togglePlayersDrawer() {
+        const drawer = document.getElementById('players-drawer');
+        const backdrop = document.getElementById('drawer-backdrop');
+        const isOpen = drawer.classList.contains('open');
+
+        if (isOpen) {
+            drawer.classList.remove('open');
+            backdrop.classList.remove('active');
+        } else {
+            this.renderPlayersDrawer();
+            drawer.classList.add('open');
+            backdrop.classList.add('active');
+        }
+    },
+
+    renderPlayersDrawer() {
+        const listEl = document.getElementById('players-list');
+        listEl.innerHTML = '';
+
+        if (this.players.length === 0) {
+            listEl.innerHTML = '<li style="color:#aaa; font-size:0.85rem; padding:10px;">Nenhum jogador na mesa.</li>';
+            return;
+        }
+
+        this.players.forEach((p, index) => {
+            const isTurn = (index === (this.currentTurnIndex % this.players.length));
+            const isHost = (index === 0);
+            const isMe = (p.id === this.myPlayerId);
+
+            const li = document.createElement('li');
+            li.className = `player-item ${isTurn ? 'turn-active' : ''}`;
+            li.innerHTML = `
+                <div class="player-info">
+                    <span class="player-name">${isHost ? '👑 ' : ''}${p.name} ${isMe ? '(Você)' : ''}</span>
+                    <span class="player-role">${isHost ? 'Xerife Líder' : (p.id === 'p_bot' ? 'Assistente Robô' : 'Companheiro de Patrulha')}</span>
+                </div>
+                ${isTurn ? '<span class="badge-turn">Sua Vez</span>' : ''}
+            `;
+            listEl.appendChild(li);
+        });
+    },
+
+    openMainMenu() {
+        if (this.mqttClient && this.mqttClient.connected) {
+            this.sendNetMessage('PLAYER_LEFT', {
+                id: this.myPlayerId,
+                name: this.playerName
+            });
+            try { this.mqttClient.end(); } catch(e) {}
+            this.mqttClient = null;
+        }
+
+        this.board = null;
+        this.deck = null;
+        this.players = [];
+        this.selectedIdx = null;
+        this.rotation = 0;
+        this.cardsPlaced = 0;
+
+        document.getElementById('board-grid').innerHTML = '';
+        document.getElementById('hand-slots').innerHTML = '';
+        document.getElementById('ui-open-exits').innerText = '-';
+        document.getElementById('ui-deck-count').innerText = '-';
+        document.getElementById('ui-header-players-count').innerText = '0';
+        document.getElementById('turn-banner').className = 'waiting-turn';
+        document.getElementById('turn-banner').innerText = 'Carregando...';
+
+        this.hideAllModals();
+        document.getElementById('players-drawer').classList.remove('open');
+        document.getElementById('drawer-backdrop').classList.remove('active');
+        document.getElementById('menu-modal').classList.remove('hidden');
+    },
+
+    showSoloConfig(withBot) {
+        this.soloWithBot = withBot;
+        this.hideAllModals();
+        const title = document.getElementById('solo-modal-title');
+        const desc = document.getElementById('solo-modal-desc');
+
+        if (withBot) {
+            title.innerText = 'Modo Solo + Robô';
+            desc.innerText = 'Você jogará em dupla cooperativa contra a Inteligência Artificial!';
+        } else {
+            title.innerText = 'Modo Solo (Solitário)';
+            desc.innerText = 'Você jogará 100% sozinho, administrando o baralho inteiro!';
+        }
+
+        document.getElementById('solo-modal').classList.remove('hidden');
+    },
+
+    showMultiplayerLobby() {
+        this.hideAllModals();
+        document.getElementById('multi-modal').classList.remove('hidden');
+        this.connectDiscovery();
+    },
+
+    hideAllModals() {
+        ['menu-modal', 'solo-modal', 'multi-modal', 'waiting-approval-modal', 'host-approval-modal', 'result-modal']
+            .forEach(id => document.getElementById(id).classList.add('hidden'));
+    },
+
+    generateRandomRoomCode() {
+        const randomNum = Math.floor(1 + Math.random() * 999);
+        document.getElementById('inp-new-room').value = `Francis2026${randomNum}`;
+    },
+
+    startSolo(difficulty) {
+        const name = document.getElementById('inp-solo-name').value.trim() || 'Principe Francis';
+        this.playerName = name;
+        this.myPlayerId = 'p_human';
+        this.currentTurnIndex = 0;
+
+        if (this.soloWithBot) {
+            this.mode = 'SOLO_BOT';
+            this.players = [
+                { id: 'p_human', name: this.playerName },
+                { id: 'p_bot', name: 'Robô Xerife' }
+            ];
+            document.getElementById('ui-game-mode-title').innerText = 'Policia (Solo + IA)';
+            document.getElementById('ui-room-code').innerText = 'Solo + Robô';
+            this.aiDeck = new Deck();
+        } else {
+            this.mode = 'SOLO_PURE';
+            this.players = [
+                { id: 'p_human', name: this.playerName }
+            ];
+            document.getElementById('ui-game-mode-title').innerText = 'Policia (Solo)';
+            document.getElementById('ui-room-code').innerText = 'Solo';
+            this.aiDeck = null;
+        }
+
+        this.hideAllModals();
+        this.init();
+
+        if (difficulty === 6) {
+            this.board.place(-1, 0, new Card(CardCatalog.JAIL_6_L, 0));
+            this.board.place(0, 0, new Card(CardCatalog.JAIL_6_M, 0));
+            this.board.place(1, 0, new Card(CardCatalog.JAIL_6_R, 0));
+        } else {
+            this.board.place(0, 0, new Card(CardCatalog.JAIL_5_L, 0));
+            this.board.place(1, 0, new Card(CardCatalog.JAIL_5_R, 0));
+        }
+
+        this.updateUI();
+        this.renderAll();
+        PanZoom.recenter();
+    },
+
+    connectDiscovery() {
+        if (this.mqttClient && this.mqttClient.connected) return;
+
+        this.myPlayerId = 'p_' + Math.random().toString(36).substring(2, 8);
+        this.mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+            clientId: 'discovery_' + this.myPlayerId,
+            clean: true,
+            connectTimeout: 5000
+        });
+
+        this.mqttClient.on('connect', () => {
+            this.mqttClient.subscribe('canion-rooms-discovery/global');
+        });
+
+        this.mqttClient.on('message', (topic, payload) => {
+            try {
+                const data = JSON.parse(payload.toString());
+                if (data.type === 'ROOM_HEARTBEAT') {
+                    this.activeRoomsMap.set(data.roomCode, {
+                        ...data,
+                        lastSeen: Date.now()
+                    });
+                    this.renderRoomsList();
+                }
+            } catch(e) {}
+        });
+    },
+
+    renderRoomsList() {
+        const container = document.getElementById('rooms-list-container');
+        const now = Date.now();
+        let html = '';
+
+        for (const [code, info] of this.activeRoomsMap.entries()) {
+            if (now - info.lastSeen < 6000) {
+                html += `
+                    <div class="room-item">
+                        <div style="text-align:left;">
+                            <strong style="color:var(--gold-text); font-size:0.85rem;">${code}</strong><br>
+                            <small style="color:#aaa;">Xerife: ${info.hostName} (${info.playerCount} na mesa)</small>
+                        </div>
+                        <button class="btn-wood" style="padding:4px 8px; font-size:0.75rem;" onclick="App.requestJoinRoom('${code}')">Entrar</button>
+                    </div>
+                `;
+            }
+        }
+
+        container.innerHTML = html || '<p style="font-size:0.8rem; color:#777; padding:8px;">Nenhuma sala pública ativa no momento.</p>';
+    },
+
+    createMultiRoom(difficulty) {
+        const name = document.getElementById('inp-multi-name').value.trim();
+        const room = document.getElementById('inp-new-room').value.trim() || 'Francis2026';
+
+        if (!name || name.length < 2) {
+            alert('Por favor, digite um nome com pelo menos 2 letras!');
+            return;
+        }
+
+        const existing = this.activeRoomsMap.get(room);
+        if (existing && Date.now() - existing.lastSeen < 6000) {
+            alert(`A sala "${room}" já está ativa! Redirecionando para entrada...`);
+            this.requestJoinRoom(room);
+            return;
+        }
+
+        this.mode = 'MULTI';
+        this.playerName = name;
+        this.roomCode = room;
+        this.players = [{ id: this.myPlayerId, name: this.playerName }];
+        this.currentTurnIndex = 0;
+
+        document.getElementById('ui-game-mode-title').innerText = 'Policia';
+        document.getElementById('ui-room-code').innerText = this.roomCode;
+        this.hideAllModals();
+
+        this.init();
+
+        if (difficulty === 6) {
+            this.board.place(-1, 0, new Card(CardCatalog.JAIL_6_L, 0));
+            this.board.place(0, 0, new Card(CardCatalog.JAIL_6_M, 0));
+            this.board.place(1, 0, new Card(CardCatalog.JAIL_6_R, 0));
+        } else {
+            this.board.place(0, 0, new Card(CardCatalog.JAIL_5_L, 0));
+            this.board.place(1, 0, new Card(CardCatalog.JAIL_5_R, 0));
+        }
+
+        this.connectRoomNetwork();
+        this.updateUI();
+        this.renderAll();
+        PanZoom.recenter();
+
+        setInterval(() => {
+            if (this.isHost() && this.mqttClient && this.mqttClient.connected) {
+                this.mqttClient.publish('canion-rooms-discovery/global', JSON.stringify({
+                    type: 'ROOM_HEARTBEAT',
+                    roomCode: this.roomCode,
+                    hostName: this.playerName,
+                    playerCount: this.players.length,
+                    playerNames: this.players.map(p => p.name.trim().toLowerCase())
+                }));
+            }
+        }, 3000);
+    },
+
+    requestJoinRoom(roomCode) {
+        const name = document.getElementById('inp-multi-name').value.trim();
+        if (!name || name.length < 2) {
+            alert('Digite seu nome antes de entrar!');
+            return;
+        }
+
+        const roomInfo = this.activeRoomsMap.get(roomCode);
+        if (roomInfo && roomInfo.playerNames && roomInfo.playerNames.includes(name.toLowerCase())) {
+            alert(`O nome "${name}" já está em uso na sala "${roomCode}". Por favor, escolha outro apelido!`);
+            return;
+        }
+
+        this.mode = 'MULTI';
+        this.playerName = name;
+        this.roomCode = roomCode;
+
+        this.hideAllModals();
+        document.getElementById('waiting-approval-modal').classList.remove('hidden');
+
+        this.connectRoomNetwork(() => {
+            this.sendNetMessage('REQUEST_JOIN', {
+                candidateId: this.myPlayerId,
+                candidateName: this.playerName
+            });
+        });
+    },
+
+    cancelJoinRequest() {
+        this.openMainMenu();
+    },
+
+    connectRoomNetwork(onReady) {
+        const topic = `canion-coop-game/${this.roomCode}`;
+        this.mqttClient.subscribe(topic, () => {
+            if (onReady) onReady();
+        });
+
+        this.mqttClient.on('message', (t, payload) => {
+            try {
+                const msg = JSON.parse(payload.toString());
+                if (msg.senderId === this.myPlayerId) return;
+                this.handleNetworkMessage(msg);
+            } catch(e) {}
+        });
+    },
+
+    sendNetMessage(type, data) {
+        if (!this.mqttClient || !this.mqttClient.connected) return;
+        this.mqttClient.publish(`canion-coop-game/${this.roomCode}`, JSON.stringify({
+            type: type,
+            senderId: this.myPlayerId,
+            senderName: this.playerName,
+            ...data
+        }));
+    },
+
+    isHost() {
+        return this.players.length > 0 && this.players[0].id === this.myPlayerId;
+    },
+
+    handleNetworkMessage(msg) {
+        this.resetInactivityTimer();
+
+        if (msg.type === 'REQUEST_JOIN') {
+            if (this.isHost()) {
+                const nameConflict = this.players.some(p => p.name.trim().toLowerCase() === msg.candidateName.trim().toLowerCase());
+                
+                if (nameConflict) {
+                    this.sendNetMessage('RESPONSE_JOIN', {
+                        candidateId: msg.candidateId,
+                        approved: false,
+                        reason: 'NAME_TAKEN',
+                        takenName: msg.candidateName
+                    });
+                    return;
+                }
+
+                this.pendingJoinRequest = msg;
+                document.getElementById('ui-requesting-player-name').innerText = msg.candidateName;
+                document.getElementById('host-approval-modal').classList.remove('hidden');
+            }
+        } else if (msg.type === 'RESPONSE_JOIN') {
+            if (msg.candidateId === this.myPlayerId) {
+                document.getElementById('waiting-approval-modal').classList.add('hidden');
+                if (msg.approved) {
+                    this.init();
+                    document.getElementById('ui-game-mode-title').innerText = 'Policia';
+                    document.getElementById('ui-room-code').innerText = this.roomCode;
+                    this.sendNetMessage('PLAYER_CONFIRMED_ENTRY', {
+                        id: this.myPlayerId,
+                        name: this.playerName
+                    });
+                } else {
+                    if (msg.reason === 'NAME_TAKEN') {
+                        alert(`O nome "${msg.takenName || this.playerName}" já está em uso nesta sala! Por favor, escolha outro nome ou apelido.`);
+                    } else {
+                        alert('Sua solicitação de entrada foi recusada pelo Xerife da sala.');
+                    }
+                    this.showMultiplayerLobby();
+                }
+            }
+        } else if (msg.type === 'PLAYER_CONFIRMED_ENTRY') {
+            if (!this.players.some(p => p.id === msg.id)) {
+                this.players.push({ id: msg.id, name: msg.name });
+            }
+            if (this.isHost()) this.sendFullStateSync();
+            this.updateUI();
+        } else if (msg.type === 'PLAYER_LEFT') {
+            const leavingIndex = this.players.findIndex(p => p.id === msg.id);
+            if (leavingIndex !== -1) {
+                this.players.splice(leavingIndex, 1);
+                if (this.currentTurnIndex >= this.players.length) {
+                    this.currentTurnIndex = 0;
+                }
+                this.updateUI();
+            }
+        } else if (msg.type === 'SYNC_FULL_STATE') {
+            this.players = msg.players;
+            this.currentTurnIndex = msg.turnIndex;
+            this.board = new Board();
+            msg.gridData.forEach(item => {
+                const t = CardCatalog[item.templateId];
+                if (t) this.board.place(item.x, item.y, new Card(t, Number(item.rotation) || 0));
+            });
+            this.renderAll();
+            this.updateUI();
+        } else if (msg.type === 'PLAY_CARD_ACTION') {
+            const t = CardCatalog[msg.templateId];
+            if (t) {
+                this.board.place(msg.x, msg.y, new Card(t, Number(msg.rotation) || 0));
+                this.cardsPlaced++;
+                this.currentTurnIndex = msg.nextTurnIndex;
+                Sound.playTap();
+                if (this.isMyTurn()) Sound.playTurnNotice();
+                this.renderAll();
+                this.updateUI();
+                this.checkGameEnd();
+            }
+        }
+    },
+
+    respondJoinRequest(approved) {
+        document.getElementById('host-approval-modal').classList.add('hidden');
+        if (!this.pendingJoinRequest) return;
+
+        this.sendNetMessage('RESPONSE_JOIN', {
+            candidateId: this.pendingJoinRequest.candidateId,
+            approved: approved
+        });
+
+        if (approved) {
+            this.players.push({
+                id: this.pendingJoinRequest.candidateId,
+                name: this.pendingJoinRequest.candidateName
+            });
+            this.sendFullStateSync();
+            this.updateUI();
+        }
+        this.pendingJoinRequest = null;
+    },
+
+    sendFullStateSync() {
+        const gridData = [];
+        for (const [key, card] of this.board.grid.entries()) {
+            const [x, y] = key.split(',').map(Number);
+            gridData.push({ x, y, templateId: card.template.id, rotation: card.rotation });
+        }
+        this.sendNetMessage('SYNC_FULL_STATE', {
+            gridData: gridData,
+            players: this.players,
+            turnIndex: this.currentTurnIndex
+        });
+    },
+
+    isMyTurn() {
+        if (this.players.length === 0) return true;
+        const cur = this.players[this.currentTurnIndex % this.players.length];
+        return cur && cur.id === this.myPlayerId;
+    },
+
+    getCurrentTurnPlayerName() {
+        if (this.players.length === 0) return this.playerName;
+        const cur = this.players[this.currentTurnIndex % this.players.length];
+        return cur ? cur.name : 'Jogador';
+    },
+
+    selectCard(idx) {
+        if (!this.isMyTurn()) {
+            alert(`Aguarde a vez de ${this.getCurrentTurnPlayerName()} jogar!`);
+            return;
+        }
+        Sound.playTap();
+        this.selectedIdx = (this.selectedIdx === idx) ? null : idx;
+        this.rotation = 0;
+        this.updateUI();
+        this.renderHand();
+        this.renderBoard();
+    },
+
+    rotateSelected() {
+        if (this.selectedIdx === null || !this.isMyTurn()) return;
+        Sound.playTap();
+        this.rotation = (this.rotation + 90) % 360;
+        this.updateUI();
+        this.renderHand();
+        this.renderBoard();
+    },
+
+    handleCellClick(x, y) {
+        if (PanZoom.hasMoved || !this.isMyTurn() || this.selectedIdx === null) return;
+        const card = this.deck.hand[this.selectedIdx];
+        if (!card) return;
+
+        if (this.board.isValidPlacement(card, { x, y }, this.rotation)) {
+            Sound.playTap();
+            
+            const placedRotation = this.rotation;
+            this.board.place(x, y, new Card(card.template, placedRotation));
+            this.deck.use(this.selectedIdx);
+            this.cardsPlaced++;
+            this.selectedIdx = null;
+            this.rotation = 0;
+            this.resetInactivityTimer();
+
+            const nextTurn = (this.currentTurnIndex + 1) % this.players.length;
+            this.currentTurnIndex = nextTurn;
+
+            if (this.mode === 'MULTI') {
+                this.sendNetMessage('PLAY_CARD_ACTION', {
+                    x, y, templateId: card.template.id, rotation: placedRotation, nextTurnIndex: nextTurn
+                });
+            }
+
+            this.updateUI();
+            this.renderAll();
+            this.checkGameEnd();
+
+            // Ativa o robô apenas se estiver no modo Solo + Robô
+            if (this.mode === 'SOLO_BOT' && this.players[this.currentTurnIndex].id === 'p_bot') {
+                setTimeout(() => this.playAITurn(), 1000);
+            }
+        }
+    },
+
+    playAITurn() {
+        if (!this.board || !this.aiDeck) return;
+
+        const pad = 1;
+        const minX = this.board.minX - pad;
+        const maxX = this.board.maxX + pad;
+        const minY = this.board.minY - pad;
+        const maxY = this.board.maxY + pad;
+
+        for (let handIdx = 0; handIdx < this.aiDeck.hand.length; handIdx++) {
+            const card = this.aiDeck.hand[handIdx];
+            for (let rot = 0; rot < 360; rot += 90) {
+                for (let y = minY; y <= maxY; y++) {
+                    for (let x = minX; x <= maxX; x++) {
+                        if (this.board.isValidPlacement(card, { x, y }, rot)) {
+                            this.board.place(x, y, new Card(card.template, rot));
+                            this.aiDeck.use(handIdx);
+                            this.cardsPlaced++;
+                            this.currentTurnIndex = (this.currentTurnIndex + 1) % this.players.length;
+                            Sound.playTap();
+                            Sound.playTurnNotice();
+                            this.renderAll();
+                            this.updateUI();
+                            this.checkGameEnd();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        this.aiDeck.use(0);
+        this.currentTurnIndex = (this.currentTurnIndex + 1) % this.players.length;
+        this.renderAll();
+        this.updateUI();
+    },
+
+    checkGameEnd() {
+        const exits = this.board.getOpenExitsCount();
+        const deckLeft = this.deck.cards.length;
+
+        if (exits === 0 && this.cardsPlaced > 0) {
+            Sound.playWin();
+            document.getElementById('result-title').innerText = 'Bandido Capturado!';
+            document.getElementById('result-message').innerText = 'Parabéns! Todas as rotas de fuga foram fechadas!';
+            document.getElementById('result-modal').classList.remove('hidden');
+        } else if (deckLeft === 0 && exits > 0) {
+            document.getElementById('result-title').innerText = 'O Bandido Fugiu!';
+            document.getElementById('result-message').innerText = 'As cartas do monte acabaram e ainda existiam túneis abertos.';
+            document.getElementById('result-modal').classList.remove('hidden');
+        }
+    },
+
+    renderBoard() {
+        const gridEl = document.getElementById('board-grid');
+        gridEl.innerHTML = '';
+        if (!this.board) return;
+
+        const pad = 1;
+        const minX = this.board.minX - pad, maxX = this.board.maxX + pad;
+        const minY = this.board.minY - pad, maxY = this.board.maxY + pad;
+        const cols = (maxX - minX) + 1, rows = (maxY - minY) + 1;
+
+        gridEl.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
+        gridEl.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
+
+        const activeCard = (this.selectedIdx !== null && this.isMyTurn()) ? this.deck.hand[this.selectedIdx] : null;
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                const cell = document.createElement('div');
+                cell.className = 'grid-cell';
+                const placed = this.board.get(x, y);
+
+                if (placed) {
+                    cell.innerHTML = SVGRenderer.render(placed);
+                } else if (activeCard) {
+                    if (this.board.isValidPlacement(activeCard, { x, y }, this.rotation)) {
+                        cell.classList.add('valid-drop');
+                        cell.onpointerup = () => this.handleCellClick(x, y);
+                    } else {
+                        cell.classList.add('invalid-drop');
+                    }
+                }
+                gridEl.appendChild(cell);
+            }
+        }
+    },
+
+    renderHand() {
+        const container = document.getElementById('hand-slots');
+        container.innerHTML = '';
+        if (!this.deck) return;
+        const myTurn = this.isMyTurn();
+
+        for (let i = 0; i < 3; i++) {
+            const slot = document.createElement('div');
+            const card = this.deck.hand[i];
+            if (card) {
+                slot.className = `hand-card ${this.selectedIdx === i ? 'selected' : ''} ${!myTurn ? 'disabled' : ''}`;
+                const rot = this.selectedIdx === i ? this.rotation : 0;
+                slot.innerHTML = SVGRenderer.render(new Card(card.template, rot));
+                slot.onclick = () => this.selectCard(i);
+            } else {
+                slot.className = 'hand-card empty';
+            }
+            container.appendChild(slot);
+        }
+    },
+
+    updateUI() {
+        if (!this.board || !this.deck) return;
+
+        document.getElementById('ui-open-exits').innerText = this.board.getOpenExitsCount();
+        document.getElementById('ui-deck-count').innerText = this.deck.cards.length;
+        document.getElementById('ui-header-players-count').innerText = this.players.length;
+
+        const banner = document.getElementById('turn-banner');
+        const activeName = this.getCurrentTurnPlayerName();
+
+        if (this.mode === 'SOLO_PURE') {
+            banner.className = 'my-turn';
+            banner.innerText = `⭐ SUA VEZ (${this.playerName})! Escolha uma carta e planeje a captura.`;
+        } else if (this.isMyTurn()) {
+            banner.className = 'my-turn';
+            banner.innerText = `⭐ SUA VEZ (${this.playerName})! Toque em 1 carta e posicione na mesa.`;
+        } else {
+            banner.className = 'waiting-turn';
+            banner.innerText = `⏳ VEZ DE ${activeName.toUpperCase()}! Aguarde a jogada...`;
+        }
+
+        const btnRot = document.getElementById('btn-rotate');
+        const txtRot = document.getElementById('ui-rotation');
+        if (this.selectedIdx !== null && this.isMyTurn()) {
+            btnRot.removeAttribute('disabled');
+            txtRot.innerText = `(${this.rotation}°)`;
+        } else {
+            btnRot.setAttribute('disabled', 'true');
+            txtRot.innerText = '(0°)';
+        }
+
+        if (document.getElementById('players-drawer').classList.contains('open')) {
+            this.renderPlayersDrawer();
+        }
+    },
+
+    renderAll() {
+        this.renderHand();
+        this.renderBoard();
+    }
+};
+
+window.addEventListener('DOMContentLoaded', () => {
+    PanZoom.init();
+    App.openMainMenu();
+});
+</script>
+
+</body>
+</html>
